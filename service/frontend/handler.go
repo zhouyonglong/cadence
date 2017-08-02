@@ -72,7 +72,7 @@ type (
 const (
 	defaultVisibilityMaxPageSize = 1000
 	defaultHistoryMaxPageSize    = 1000
-	defaultRPS                   = 1200 // This limit is based on experimental runs.
+	defaultRPS                   = 1000000 // This limit is based on experimental runs.
 )
 
 var (
