@@ -42,6 +42,10 @@ type Config struct {
 	RangeSizeBits        uint
 	AcquireShardInterval time.Duration
 
+	// shardContext settings
+	InitialWriteBackoffInterval time.Duration
+	MaxWriteBackoffInterval     time.Duration
+
 	// Timeout settings
 	DefaultScheduleToStartActivityTimeoutInSecs int32
 	DefaultScheduleToCloseActivityTimeoutInSecs int32
@@ -71,6 +75,8 @@ func NewConfig(numberOfShards int) *Config {
 		HistoryCacheTTL:                             time.Hour,
 		RangeSizeBits:                               20, // 20 bits for sequencer, 2^20 sequence number for any range
 		AcquireShardInterval:                        time.Minute,
+		InitialWriteBackoffInterval:                 time.Millisecond * 10,
+		MaxWriteBackoffInterval:                     time.Second * 10,
 		DefaultScheduleToStartActivityTimeoutInSecs: 10,
 		DefaultScheduleToCloseActivityTimeoutInSecs: 10,
 		DefaultStartToCloseActivityTimeoutInSecs:    10,

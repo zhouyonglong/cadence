@@ -74,6 +74,9 @@ type (
 		transferSequenceNumber    int64
 		maxTransferSequenceNumber int64
 		transferMaxReadLevel      int64
+		delayWrites               bool
+		lastWriteTimestamp        time.Time
+		writeBackoff              time.Duration
 	}
 )
 
@@ -142,6 +145,10 @@ func (s *shardContextImpl) CreateWorkflowExecution(request *persistence.CreateWo
 	s.Lock()
 	defer s.Unlock()
 
+	if s.shouldThrottleWriteLocked() {
+		return nil, &shared.ServiceBusyError{Message: "CreateWorkflowExecution is throttled due to backoff from persistence."}
+	}
+
 	transferMaxReadLevel := int64(0)
 	// assign IDs for the transfer tasks
 	// Must be done under the shard lock to ensure transfer tasks are written to persistence in increasing
@@ -164,6 +171,7 @@ Create_Loop:
 		currentRangeID := s.getRangeID()
 		request.RangeID = currentRangeID
 		response, err := s.executionManager.CreateWorkflowExecution(request)
+		s.updateWriteBackoffLocked(err)
 		if err != nil {
 			switch err.(type) {
 			case *persistence.ShardOwnershipLostError:
@@ -177,7 +185,7 @@ Create_Loop:
 						s.closeShard()
 					}
 				}
-			case *shared.WorkflowExecutionAlreadyStartedError:
+			case *shared.WorkflowExecutionAlreadyStartedError, *shared.ServiceBusyError:
 			default:
 				{
 					// We have no idea if the write failed or will eventually make it to
@@ -204,6 +212,10 @@ Create_Loop:
 func (s *shardContextImpl) UpdateWorkflowExecution(request *persistence.UpdateWorkflowExecutionRequest) error {
 	s.Lock()
 	defer s.Unlock()
+
+	if s.shouldThrottleWriteLocked() {
+		return &shared.ServiceBusyError{Message: "UpdateWorkflowExecution is throttled due to backoff from persistence."}
+	}
 
 	transferMaxReadLevel := int64(0)
 	// assign IDs for the transfer tasks
@@ -239,6 +251,7 @@ Update_Loop:
 		currentRangeID := s.getRangeID()
 		request.RangeID = currentRangeID
 		err := s.executionManager.UpdateWorkflowExecution(request)
+		s.updateWriteBackoffLocked(err)
 		if err != nil {
 			switch err.(type) {
 			case *persistence.ShardOwnershipLostError:
@@ -252,7 +265,7 @@ Update_Loop:
 						s.closeShard()
 					}
 				}
-			case *persistence.ConditionFailedError:
+			case *persistence.ConditionFailedError, *shared.ServiceBusyError:
 			default:
 				{
 					// We have no idea if the write failed or will eventually make it to
@@ -278,18 +291,21 @@ Update_Loop:
 
 func (s *shardContextImpl) AppendHistoryEvents(request *persistence.AppendHistoryEventsRequest) error {
 	// No need to lock context here, as we can write concurrently to append history events
+	if s.shouldThrottleWrite() {
+		return &shared.ServiceBusyError{Message: "AppendHistoryEvents is throttled due to backoff from persistence."}
+	}
 	currentRangeID := atomic.LoadInt64(&s.rangeID)
 	request.RangeID = currentRangeID
-	err0 := s.historyMgr.AppendHistoryEvents(request)
-	if err0 != nil {
-		if _, ok := err0.(*persistence.ConditionFailedError); ok {
+	err := s.historyMgr.AppendHistoryEvents(request)
+	if err != nil {
+		if _, ok := err.(*persistence.ConditionFailedError); ok {
 			// Inserting a new event failed, lets try to overwrite the tail
 			request.Overwrite = true
-			return s.historyMgr.AppendHistoryEvents(request)
+			err = s.historyMgr.AppendHistoryEvents(request)
 		}
 	}
-
-	return err0
+	s.updateWriteBackoff(err)
+	return err
 }
 
 func (s *shardContextImpl) GetConfig() *Config {
@@ -425,6 +441,44 @@ func (s *shardContextImpl) allocateTimerIDsLocked(timerTasks []persistence.Task)
 			persistence.GetVisibilityTSFrom(task), task.GetTaskID(), s.shardInfo.TimerAckLevel)
 	}
 	return nil
+}
+
+func (s *shardContextImpl) updateWriteBackoff(err error) {
+	s.Lock()
+	defer s.Unlock()
+	s.updateWriteBackoffLocked(err)
+}
+
+func (s *shardContextImpl) updateWriteBackoffLocked(err error) {
+	s.lastWriteTimestamp = time.Now()
+	switch err.(type) {
+	case *shared.InternalServiceError, *shared.ServiceBusyError, *persistence.TimeoutError:
+		{
+			s.delayWrites = true
+			s.writeBackoff *= 2
+			if s.writeBackoff > s.config.MaxWriteBackoffInterval {
+				s.writeBackoff = s.config.MaxWriteBackoffInterval
+			}
+		}
+	default:
+		{
+			s.delayWrites = false
+			s.writeBackoff = s.config.InitialWriteBackoffInterval
+		}
+	}
+}
+
+func (s *shardContextImpl) shouldThrottleWrite() bool {
+	s.RLock()
+	defer s.RUnlock()
+	return s.shouldThrottleWriteLocked()
+}
+
+func (s *shardContextImpl) shouldThrottleWriteLocked() bool {
+	if s.delayWrites && s.lastWriteTimestamp.Add(s.writeBackoff).After(time.Now()) {
+		return true
+	}
+	return false
 }
 
 func (s *shardContextImpl) GetTimeSource() common.TimeSource {
