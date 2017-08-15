@@ -298,7 +298,7 @@ func (wh *WorkflowHandler) PollForActivityTask(
 	defer sw.Stop()
 
 	if ok, _ := wh.rateLimiter.TryConsume(1); !ok {
-		return nil, wh.error(createServiceBusyError(), scope)
+		return nil, nil
 	}
 
 	wh.Service.GetLogger().Debug("Received PollForActivityTask")
@@ -339,7 +339,7 @@ func (wh *WorkflowHandler) PollForDecisionTask(
 	defer sw.Stop()
 
 	if ok, _ := wh.rateLimiter.TryConsume(1); !ok {
-		return nil, wh.error(createServiceBusyError(), scope)
+		return nil, nil
 	}
 
 	wh.Service.GetLogger().Debug("Received PollForDecisionTask")
