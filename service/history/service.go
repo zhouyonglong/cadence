@@ -42,9 +42,10 @@ type Config struct {
 	RangeSizeBits        uint
 	AcquireShardInterval time.Duration
 
-	// shardContext settings
-	InitialWriteBackoffInterval time.Duration
-	MaxWriteBackoffInterval     time.Duration
+	// persistence throttler settings
+	PersistenceRPS                    int
+	InitialPersistenceBackoffInterval time.Duration
+	MaxPersistenceBackoffInterval     time.Duration
 
 	// Timeout settings
 	DefaultScheduleToStartActivityTimeoutInSecs int32
@@ -75,8 +76,9 @@ func NewConfig(numberOfShards int) *Config {
 		HistoryCacheTTL:                             time.Hour,
 		RangeSizeBits:                               20, // 20 bits for sequencer, 2^20 sequence number for any range
 		AcquireShardInterval:                        time.Minute,
-		InitialWriteBackoffInterval:                 time.Millisecond * 10,
-		MaxWriteBackoffInterval:                     time.Second * 10,
+		PersistenceRPS:                              5000,
+		InitialPersistenceBackoffInterval:           time.Millisecond * 10,
+		MaxPersistenceBackoffInterval:               time.Second * 10,
 		DefaultScheduleToStartActivityTimeoutInSecs: 10,
 		DefaultScheduleToCloseActivityTimeoutInSecs: 10,
 		DefaultStartToCloseActivityTimeoutInSecs:    10,
@@ -98,6 +100,7 @@ type Service struct {
 	stopC         chan struct{}
 	params        *service.BootstrapParams
 	config        *Config
+	throttler     persistence.Throttler
 	metricsClient metrics.Client
 }
 
@@ -121,6 +124,7 @@ func (s *Service) Start() {
 	base := service.New(p)
 
 	s.metricsClient = base.GetMetricsClient()
+	s.throttler = persistence.NewThrottler(s.config.PersistenceRPS, s.config.InitialPersistenceBackoffInterval, s.config.MaxPersistenceBackoffInterval)
 
 	shardMgr, err := persistence.NewCassandraShardPersistence(p.CassandraConfig.Hosts,
 		p.CassandraConfig.Port,
@@ -128,6 +132,7 @@ func (s *Service) Start() {
 		p.CassandraConfig.Password,
 		p.CassandraConfig.Datacenter,
 		p.CassandraConfig.Keyspace,
+		s.throttler,
 		p.Logger)
 
 	if err != nil {
@@ -171,6 +176,7 @@ func (s *Service) Start() {
 		p.CassandraConfig.Password,
 		p.CassandraConfig.Datacenter,
 		p.CassandraConfig.VisibilityKeyspace,
+		s.throttler,
 		p.Logger)
 
 	if err != nil {
@@ -183,6 +189,7 @@ func (s *Service) Start() {
 		p.CassandraConfig.Password,
 		p.CassandraConfig.Datacenter,
 		p.CassandraConfig.Keyspace,
+		s.throttler,
 		p.Logger)
 
 	if err != nil {
@@ -190,7 +197,7 @@ func (s *Service) Start() {
 	}
 
 	history = persistence.NewHistoryPersistenceClient(history, base.GetMetricsClient())
-	execMgrFactory := NewExecutionManagerFactory(&p.CassandraConfig, p.Logger, base.GetMetricsClient())
+	execMgrFactory := NewExecutionManagerFactory(&p.CassandraConfig, s.throttler, p.Logger, base.GetMetricsClient())
 
 	handler, tchanServers := NewHandler(base,
 		s.config,

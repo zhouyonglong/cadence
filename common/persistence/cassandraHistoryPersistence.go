@@ -54,13 +54,14 @@ const (
 
 type (
 	cassandraHistoryPersistence struct {
-		session *gocql.Session
-		logger  bark.Logger
+		session   *gocql.Session
+		throttler Throttler
+		logger    bark.Logger
 	}
 )
 
 // NewCassandraHistoryPersistence is used to create an instance of HistoryManager implementation
-func NewCassandraHistoryPersistence(hosts string, port int, user, password, dc string, keyspace string, logger bark.Logger) (HistoryManager,
+func NewCassandraHistoryPersistence(hosts string, port int, user, password, dc string, keyspace string, throttler Throttler, logger bark.Logger) (HistoryManager,
 	error) {
 	cluster := common.NewCassandraCluster(hosts, port, user, password, dc)
 	cluster.Keyspace = keyspace
@@ -74,7 +75,7 @@ func NewCassandraHistoryPersistence(hosts string, port int, user, password, dc s
 		return nil, err
 	}
 
-	return &cassandraHistoryPersistence{session: session, logger: logger}, nil
+	return &cassandraHistoryPersistence{session: session, throttler: throttler, logger: logger}, nil
 }
 
 // Close gracefully releases the resources held by this object
@@ -85,6 +86,9 @@ func (h *cassandraHistoryPersistence) Close() {
 }
 
 func (h *cassandraHistoryPersistence) AppendHistoryEvents(request *AppendHistoryEventsRequest) error {
+	if h.throttler.ShouldThrottleRequest() {
+		return &workflow.ServiceBusyError{Message: "AppendHistoryEvents is throttled due to backoff from persistence."}
+	}
 	var query *gocql.Query
 	if request.Overwrite {
 		query = h.session.Query(templateOverwriteHistoryEvents,
@@ -136,6 +140,9 @@ func (h *cassandraHistoryPersistence) AppendHistoryEvents(request *AppendHistory
 
 func (h *cassandraHistoryPersistence) GetWorkflowExecutionHistory(request *GetWorkflowExecutionHistoryRequest) (
 	*GetWorkflowExecutionHistoryResponse, error) {
+	if h.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "GetWorkflowExecutionHistory is throttled due to backoff from persistence."}
+	}
 	execution := request.Execution
 	query := h.session.Query(templateGetWorkflowExecutionHistory,
 		request.DomainID,
@@ -181,6 +188,9 @@ func (h *cassandraHistoryPersistence) GetWorkflowExecutionHistory(request *GetWo
 
 func (h *cassandraHistoryPersistence) DeleteWorkflowExecutionHistory(
 	request *DeleteWorkflowExecutionHistoryRequest) error {
+	if h.throttler.ShouldThrottleRequest() {
+		return &workflow.ServiceBusyError{Message: "DeleteWorkflowExecutionHistory is throttled due to backoff from persistence."}
+	}
 	execution := request.Execution
 	query := h.session.Query(templateDeleteWorkflowExecutionHistory,
 		request.DomainID,

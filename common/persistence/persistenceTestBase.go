@@ -76,6 +76,7 @@ type (
 		ShardInfo           *ShardInfo
 		TaskIDGenerator     TransferTaskIDGenerator
 		readLevel           int64
+		throttler           Throttler
 		CassandraTestCluster
 	}
 
@@ -109,7 +110,7 @@ func newTestExecutionMgrFactory(options TestBaseOptions, cassandra CassandraTest
 func (f *testExecutionMgrFactory) CreateExecutionManager(shardID int) (ExecutionManager, error) {
 	return NewCassandraWorkflowExecutionPersistence(f.options.ClusterHost, f.options.ClusterPort, f.options.ClusterUser,
 		f.options.ClusterPassword, f.options.Datacenter, f.cassandra.keyspace,
-		shardID, f.logger)
+		shardID, newNoopThrottler(), f.logger)
 }
 
 func (g *testTransferTaskIDGenerator) GetNextTransferTaskID() (int64, error) {
@@ -121,10 +122,11 @@ func (s *TestBase) SetupWorkflowStoreWithOptions(options TestBaseOptions) {
 	log := bark.NewLoggerFromLogrus(log.New())
 	// Setup Workflow keyspace and deploy schema for tests
 	s.CassandraTestCluster.setupTestCluster(options.KeySpace, options.DropKeySpace, options.SchemaDir)
+	s.throttler = newNoopThrottler()
 	shardID := 0
 	var err error
 	s.ShardMgr, err = NewCassandraShardPersistence(options.ClusterHost, options.ClusterPort, options.ClusterUser,
-		options.ClusterPassword, options.Datacenter, s.CassandraTestCluster.keyspace, log)
+		options.ClusterPassword, options.Datacenter, s.CassandraTestCluster.keyspace, s.throttler, log)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -135,14 +137,14 @@ func (s *TestBase) SetupWorkflowStoreWithOptions(options TestBaseOptions) {
 		log.Fatal(err)
 	}
 	s.TaskMgr, err = NewCassandraTaskPersistence(options.ClusterHost, options.ClusterPort, options.ClusterUser,
-		options.ClusterPassword, options.Datacenter, s.CassandraTestCluster.keyspace,
+		options.ClusterPassword, options.Datacenter, s.CassandraTestCluster.keyspace, s.throttler,
 		log)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	s.HistoryMgr, err = NewCassandraHistoryPersistence(options.ClusterHost, options.ClusterPort, options.ClusterUser,
-		options.ClusterPassword, options.Datacenter, s.CassandraTestCluster.keyspace, log)
+		options.ClusterPassword, options.Datacenter, s.CassandraTestCluster.keyspace, s.throttler, log)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -154,7 +156,7 @@ func (s *TestBase) SetupWorkflowStoreWithOptions(options TestBaseOptions) {
 	}
 
 	s.VisibilityMgr, err = NewCassandraVisibilityPersistence(options.ClusterHost, options.ClusterPort,
-		options.ClusterUser, options.ClusterPassword, options.Datacenter, s.CassandraTestCluster.keyspace, log)
+		options.ClusterUser, options.ClusterPassword, options.Datacenter, s.CassandraTestCluster.keyspace, s.throttler, log)
 	if err != nil {
 		log.Fatal(err)
 	}

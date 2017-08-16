@@ -34,6 +34,11 @@ type Config struct {
 	// Time to hold a poll request before returning an empty response if there are no tasks
 	LongPollExpirationInterval time.Duration
 
+	// persistence configuration
+	PersistenceRPS                    int
+	InitialPersistenceBackoffInterval time.Duration
+	MaxPersistenceBackoffInterval     time.Duration
+
 	// taskListManager configuration
 	RangeSize         int64
 	GetTasksBatchSize int
@@ -59,17 +64,19 @@ func NewConfig() *Config {
 
 // Service represents the cadence-matching service
 type Service struct {
-	stopC  chan struct{}
-	params *service.BootstrapParams
-	config *Config
+	stopC     chan struct{}
+	params    *service.BootstrapParams
+	throttler persistence.Throttler
+	config    *Config
 }
 
 // NewService builds a new cadence-matching service
 func NewService(params *service.BootstrapParams, config *Config) common.Daemon {
 	return &Service{
-		params: params,
-		config: config,
-		stopC:  make(chan struct{}),
+		params:    params,
+		config:    config,
+		throttler: persistence.NewThrottler(config.PersistenceRPS, config.InitialPersistenceBackoffInterval, config.MaxPersistenceBackoffInterval),
+		stopC:     make(chan struct{}),
 	}
 }
 
@@ -89,6 +96,7 @@ func (s *Service) Start() {
 		p.CassandraConfig.Password,
 		p.CassandraConfig.Datacenter,
 		p.CassandraConfig.Keyspace,
+		s.throttler,
 		base.GetLogger())
 
 	if err != nil {

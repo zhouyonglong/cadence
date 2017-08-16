@@ -31,16 +31,18 @@ import (
 // persistence.ExecutionManagerFactory interface
 type executionMgrFactory struct {
 	config        *config.Cassandra
+	throttler     persistence.Throttler
 	logger        bark.Logger
 	metricsClient metrics.Client
 }
 
 // NewExecutionManagerFactory builds and returns a factory object
 func NewExecutionManagerFactory(config *config.Cassandra,
-	logger bark.Logger, mClient metrics.Client) persistence.ExecutionManagerFactory {
+	throttler persistence.Throttler, logger bark.Logger, mClient metrics.Client) persistence.ExecutionManagerFactory {
 
 	return &executionMgrFactory{
 		config:        config,
+		throttler:     throttler,
 		logger:        logger,
 		metricsClient: mClient,
 	}
@@ -57,6 +59,7 @@ func (factory *executionMgrFactory) CreateExecutionManager(shardID int) (persist
 		factory.config.Datacenter,
 		factory.config.Keyspace,
 		shardID,
+		factory.throttler,
 		factory.logger)
 
 	if err != nil {

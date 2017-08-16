@@ -21,6 +21,8 @@
 package frontend
 
 import (
+	"time"
+
 	"github.com/uber/cadence/common"
 	"github.com/uber/cadence/common/persistence"
 	"github.com/uber/cadence/common/service"
@@ -28,9 +30,12 @@ import (
 
 // Config represents configuration for cadence-frontend service
 type Config struct {
-	DefaultVisibilityMaxPageSize int32
-	DefaultHistoryMaxPageSize    int32
-	RPS                          int
+	DefaultVisibilityMaxPageSize      int32
+	DefaultHistoryMaxPageSize         int32
+	RPS                               int
+	PersistenceRPS                    int
+	InitialPersistenceBackoffInterval time.Duration
+	MaxPersistenceBackoffInterval     time.Duration
 }
 
 // NewConfig returns new service config with default values
@@ -38,23 +43,26 @@ func NewConfig() *Config {
 	return &Config{
 		DefaultVisibilityMaxPageSize: 1000,
 		DefaultHistoryMaxPageSize:    1000,
-		RPS: 1200, // This limit is based on experimental runs.
+		RPS:            1200, // This limit is based on experimental runs.
+		PersistenceRPS: 300,
 	}
 }
 
 // Service represents the cadence-frontend service
 type Service struct {
-	stopC  chan struct{}
-	config *Config
-	params *service.BootstrapParams
+	stopC     chan struct{}
+	config    *Config
+	throttler persistence.Throttler
+	params    *service.BootstrapParams
 }
 
 // NewService builds a new cadence-frontend service
 func NewService(params *service.BootstrapParams, config *Config) common.Daemon {
 	return &Service{
-		params: params,
-		config: config,
-		stopC:  make(chan struct{}),
+		params:    params,
+		config:    config,
+		throttler: persistence.NewThrottler(config.PersistenceRPS, config.InitialPersistenceBackoffInterval, config.MaxPersistenceBackoffInterval),
+		stopC:     make(chan struct{}),
 	}
 }
 
@@ -87,6 +95,7 @@ func (s *Service) Start() {
 		p.CassandraConfig.Password,
 		p.CassandraConfig.Datacenter,
 		p.CassandraConfig.VisibilityKeyspace,
+		s.throttler,
 		p.Logger)
 
 	if err != nil {
@@ -99,6 +108,7 @@ func (s *Service) Start() {
 		p.CassandraConfig.Password,
 		p.CassandraConfig.Datacenter,
 		p.CassandraConfig.Keyspace,
+		s.throttler,
 		p.Logger)
 
 	if err != nil {

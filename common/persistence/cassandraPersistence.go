@@ -508,13 +508,14 @@ type (
 		session      *gocql.Session
 		lowConslevel gocql.Consistency
 		shardID      int
+		throttler    Throttler
 		logger       bark.Logger
 	}
 )
 
 // NewCassandraShardPersistence is used to create an instance of ShardManager implementation
 func NewCassandraShardPersistence(hosts string, port int, user, password, dc string, keyspace string,
-	logger bark.Logger) (ShardManager, error) {
+	throttler Throttler, logger bark.Logger) (ShardManager, error) {
 	cluster := common.NewCassandraCluster(hosts, port, user, password, dc)
 	cluster.Keyspace = keyspace
 	cluster.ProtoVersion = cassandraProtoVersion
@@ -527,12 +528,12 @@ func NewCassandraShardPersistence(hosts string, port int, user, password, dc str
 		return nil, err
 	}
 
-	return &cassandraPersistence{shardID: -1, session: session, lowConslevel: gocql.One, logger: logger}, nil
+	return &cassandraPersistence{shardID: -1, session: session, lowConslevel: gocql.One, throttler: throttler, logger: logger}, nil
 }
 
 // NewCassandraWorkflowExecutionPersistence is used to create an instance of workflowExecutionManager implementation
 func NewCassandraWorkflowExecutionPersistence(hosts string, port int, user, password, dc string, keyspace string,
-	shardID int, logger bark.Logger) (ExecutionManager, error) {
+	shardID int, throttler Throttler, logger bark.Logger) (ExecutionManager, error) {
 	cluster := common.NewCassandraCluster(hosts, port, user, password, dc)
 	cluster.Keyspace = keyspace
 	cluster.ProtoVersion = cassandraProtoVersion
@@ -545,12 +546,12 @@ func NewCassandraWorkflowExecutionPersistence(hosts string, port int, user, pass
 		return nil, err
 	}
 
-	return &cassandraPersistence{shardID: shardID, session: session, lowConslevel: gocql.One, logger: logger}, nil
+	return &cassandraPersistence{shardID: shardID, session: session, lowConslevel: gocql.One, throttler: throttler, logger: logger}, nil
 }
 
 // NewCassandraTaskPersistence is used to create an instance of TaskManager implementation
 func NewCassandraTaskPersistence(hosts string, port int, user, password, dc string, keyspace string,
-	logger bark.Logger) (TaskManager, error) {
+	throttler Throttler, logger bark.Logger) (TaskManager, error) {
 	cluster := common.NewCassandraCluster(hosts, port, user, password, dc)
 	cluster.Keyspace = keyspace
 	cluster.ProtoVersion = cassandraProtoVersion
@@ -562,7 +563,7 @@ func NewCassandraTaskPersistence(hosts string, port int, user, password, dc stri
 	if err != nil {
 		return nil, err
 	}
-	return &cassandraPersistence{shardID: -1, session: session, lowConslevel: gocql.One, logger: logger}, nil
+	return &cassandraPersistence{shardID: -1, session: session, lowConslevel: gocql.One, throttler: throttler, logger: logger}, nil
 }
 
 // Close releases the underlying resources held by this object
@@ -573,6 +574,10 @@ func (d *cassandraPersistence) Close() {
 }
 
 func (d *cassandraPersistence) CreateShard(request *CreateShardRequest) error {
+	if d.throttler.ShouldThrottleRequest() {
+		return &workflow.ServiceBusyError{Message: "CreateShard is throttled due to backoff from persistence."}
+	}
+
 	cqlNowTimestamp := common.UnixNanoToCQLTimestamp(time.Now().UnixNano())
 	shardInfo := request.ShardInfo
 	query := d.session.Query(templateCreateShardQuery,
@@ -594,6 +599,7 @@ func (d *cassandraPersistence) CreateShard(request *CreateShardRequest) error {
 
 	previous := make(map[string]interface{})
 	applied, err := query.MapScanCAS(previous)
+	d.throttler.ReportError(err)
 	if err != nil {
 		if isThrottlingError(err) {
 			return &workflow.ServiceBusyError{
@@ -617,6 +623,10 @@ func (d *cassandraPersistence) CreateShard(request *CreateShardRequest) error {
 }
 
 func (d *cassandraPersistence) GetShard(request *GetShardRequest) (*GetShardResponse, error) {
+	if d.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "GetShard is throttled due to backoff from persistence."}
+	}
+
 	shardID := request.ShardID
 	query := d.session.Query(templateGetShardQuery,
 		shardID,
@@ -628,7 +638,9 @@ func (d *cassandraPersistence) GetShard(request *GetShardRequest) (*GetShardResp
 		rowTypeShardTaskID).Consistency(d.lowConslevel)
 
 	result := make(map[string]interface{})
-	if err := query.MapScan(result); err != nil {
+	err := query.MapScan(result)
+	d.throttler.ReportError(err)
+	if err != nil {
 		if err == gocql.ErrNotFound {
 			return nil, &workflow.EntityNotExistsError{
 				Message: fmt.Sprintf("Shard not found.  ShardId: %v", shardID),
@@ -650,6 +662,10 @@ func (d *cassandraPersistence) GetShard(request *GetShardRequest) (*GetShardResp
 }
 
 func (d *cassandraPersistence) UpdateShard(request *UpdateShardRequest) error {
+	if d.throttler.ShouldThrottleRequest() {
+		return &workflow.ServiceBusyError{Message: "UpdateShard is throttled due to backoff from persistence."}
+	}
+
 	cqlNowTimestamp := common.UnixNanoToCQLTimestamp(time.Now().UnixNano())
 	shardInfo := request.ShardInfo
 
@@ -673,6 +689,7 @@ func (d *cassandraPersistence) UpdateShard(request *UpdateShardRequest) error {
 
 	previous := make(map[string]interface{})
 	applied, err := query.MapScanCAS(previous)
+	d.throttler.ReportError(err)
 	if err != nil {
 		if isThrottlingError(err) {
 			return &workflow.ServiceBusyError{
@@ -702,6 +719,10 @@ func (d *cassandraPersistence) UpdateShard(request *UpdateShardRequest) error {
 
 func (d *cassandraPersistence) CreateWorkflowExecution(request *CreateWorkflowExecutionRequest) (
 	*CreateWorkflowExecutionResponse, error) {
+	if d.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "CreateWorkflowExecution is throttled due to backoff from persistence."}
+	}
+
 	transferTaskID := uuid.New()
 	cqlNowTimestamp := common.UnixNanoToCQLTimestamp(time.Now().UnixNano())
 	batch := d.session.NewBatch(gocql.LoggedBatch)
@@ -727,6 +748,7 @@ func (d *cassandraPersistence) CreateWorkflowExecution(request *CreateWorkflowEx
 
 	previous := make(map[string]interface{})
 	applied, iter, err := d.session.MapExecuteBatchCAS(batch, previous)
+	d.throttler.ReportError(err)
 	defer func() {
 		if iter != nil {
 			iter.Close()
@@ -888,6 +910,10 @@ func (d *cassandraPersistence) CreateWorkflowExecutionWithinBatch(request *Creat
 
 func (d *cassandraPersistence) GetWorkflowExecution(request *GetWorkflowExecutionRequest) (
 	*GetWorkflowExecutionResponse, error) {
+	if d.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "GetWorkflowExecution is throttled due to backoff from persistence."}
+	}
+
 	execution := request.Execution
 	query := d.session.Query(templateGetWorkflowExecutionQuery,
 		d.shardID,
@@ -899,7 +925,9 @@ func (d *cassandraPersistence) GetWorkflowExecution(request *GetWorkflowExecutio
 		rowTypeExecutionTaskID)
 
 	result := make(map[string]interface{})
-	if err := query.MapScan(result); err != nil {
+	err := query.MapScan(result)
+	d.throttler.ReportError(err)
+	if err != nil {
 		if err == gocql.ErrNotFound {
 			return nil, &workflow.EntityNotExistsError{
 				Message: fmt.Sprintf("Workflow execution not found.  WorkflowId: %v, RunId: %v",
@@ -956,6 +984,10 @@ func (d *cassandraPersistence) GetWorkflowExecution(request *GetWorkflowExecutio
 }
 
 func (d *cassandraPersistence) UpdateWorkflowExecution(request *UpdateWorkflowExecutionRequest) error {
+	if d.throttler.ShouldThrottleRequest() {
+		return &workflow.ServiceBusyError{Message: "UpdateWorkflowExecution is throttled due to backoff from persistence."}
+	}
+
 	executionInfo := request.ExecutionInfo
 	cqlNowTimestamp := common.UnixNanoToCQLTimestamp(time.Now().UnixNano())
 
@@ -1046,6 +1078,7 @@ func (d *cassandraPersistence) UpdateWorkflowExecution(request *UpdateWorkflowEx
 
 	previous := make(map[string]interface{})
 	applied, iter, err := d.session.MapExecuteBatchCAS(batch, previous)
+	d.throttler.ReportError(err)
 	defer func() {
 		if iter != nil {
 			iter.Close()
@@ -1122,6 +1155,10 @@ func (d *cassandraPersistence) UpdateWorkflowExecution(request *UpdateWorkflowEx
 }
 
 func (d *cassandraPersistence) DeleteWorkflowExecution(request *DeleteWorkflowExecutionRequest) error {
+	if d.throttler.ShouldThrottleRequest() {
+		return &workflow.ServiceBusyError{Message: "DeleteWorkflowExecution is throttled due to backoff from persistence."}
+	}
+
 	info := request.ExecutionInfo
 
 	query := d.session.Query(templateDeleteWorkflowExecutionMutableStateQuery,
@@ -1134,6 +1171,7 @@ func (d *cassandraPersistence) DeleteWorkflowExecution(request *DeleteWorkflowEx
 		rowTypeExecutionTaskID)
 
 	err := query.Exec()
+	d.throttler.ReportError(err)
 	if err != nil {
 		if isThrottlingError(err) {
 			return &workflow.ServiceBusyError{
@@ -1150,6 +1188,10 @@ func (d *cassandraPersistence) DeleteWorkflowExecution(request *DeleteWorkflowEx
 
 func (d *cassandraPersistence) GetCurrentExecution(request *GetCurrentExecutionRequest) (*GetCurrentExecutionResponse,
 	error) {
+	if d.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "GetCurrentExecution is throttled due to backoff from persistence."}
+	}
+
 	query := d.session.Query(templateGetCurrentExecutionQuery,
 		d.shardID,
 		rowTypeExecution,
@@ -1160,7 +1202,9 @@ func (d *cassandraPersistence) GetCurrentExecution(request *GetCurrentExecutionR
 		rowTypeExecutionTaskID)
 
 	var currentRunID string
-	if err := query.Scan(&currentRunID); err != nil {
+	err := query.Scan(&currentRunID)
+	d.throttler.ReportError(err)
+	if err != nil {
 		if err == gocql.ErrNotFound {
 			return nil, &workflow.EntityNotExistsError{
 				Message: fmt.Sprintf("Workflow execution not found.  WorkflowId: %v",
@@ -1181,6 +1225,9 @@ func (d *cassandraPersistence) GetCurrentExecution(request *GetCurrentExecutionR
 }
 
 func (d *cassandraPersistence) GetTransferTasks(request *GetTransferTasksRequest) (*GetTransferTasksResponse, error) {
+	if d.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "GetTransferTasks is throttled due to backoff from persistence."}
+	}
 
 	// Reading transfer tasks need to be quorum level consistent, otherwise we could loose task
 	query := d.session.Query(templateGetTransferTasksQuery,
@@ -1221,6 +1268,10 @@ func (d *cassandraPersistence) GetTransferTasks(request *GetTransferTasksRequest
 }
 
 func (d *cassandraPersistence) CompleteTransferTask(request *CompleteTransferTaskRequest) error {
+	if d.throttler.ShouldThrottleRequest() {
+		return &workflow.ServiceBusyError{Message: "CompleteTransferTask is throttled due to backoff from persistence."}
+	}
+
 	query := d.session.Query(templateCompleteTransferTaskQuery,
 		d.shardID,
 		rowTypeTransferTask,
@@ -1231,6 +1282,7 @@ func (d *cassandraPersistence) CompleteTransferTask(request *CompleteTransferTas
 		request.TaskID)
 
 	err := query.Exec()
+	d.throttler.ReportError(err)
 	if err != nil {
 		if isThrottlingError(err) {
 			return &workflow.ServiceBusyError{
@@ -1246,6 +1298,10 @@ func (d *cassandraPersistence) CompleteTransferTask(request *CompleteTransferTas
 }
 
 func (d *cassandraPersistence) CompleteTimerTask(request *CompleteTimerTaskRequest) error {
+	if d.throttler.ShouldThrottleRequest() {
+		return &workflow.ServiceBusyError{Message: "CompleteTimerTask is throttled due to backoff from persistence."}
+	}
+
 	ts := common.UnixNanoToCQLTimestamp(request.VisibilityTimestamp.UnixNano())
 	query := d.session.Query(templateCompleteTimerTaskQuery,
 		d.shardID,
@@ -1257,6 +1313,7 @@ func (d *cassandraPersistence) CompleteTimerTask(request *CompleteTimerTaskReque
 		request.TaskID)
 
 	err := query.Exec()
+	d.throttler.ReportError(err)
 	if err != nil {
 		if isThrottlingError(err) {
 			return &workflow.ServiceBusyError{
@@ -1278,6 +1335,10 @@ func (d *cassandraPersistence) LeaseTaskList(request *LeaseTaskListRequest) (*Le
 			Message: fmt.Sprintf("LeaseTaskList requires non empty task list"),
 		}
 	}
+
+	if d.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "LeaseTaskList is throttled due to backoff from persistence."}
+	}
 	query := d.session.Query(templateGetTaskList,
 		request.DomainID,
 		request.TaskList,
@@ -1288,6 +1349,7 @@ func (d *cassandraPersistence) LeaseTaskList(request *LeaseTaskListRequest) (*Le
 	var rangeID, ackLevel int64
 	var tlDB map[string]interface{}
 	err := query.Scan(&rangeID, &tlDB)
+	d.throttler.ReportError(err)
 	if err != nil {
 		if err == gocql.ErrNotFound { // First time task list is used
 			query = d.session.Query(templateInsertTaskListQuery,
@@ -1330,6 +1392,7 @@ func (d *cassandraPersistence) LeaseTaskList(request *LeaseTaskListRequest) (*Le
 	}
 	previous := make(map[string]interface{})
 	applied, err := query.MapScanCAS(previous)
+	d.throttler.ReportError(err)
 	if err != nil {
 		if isThrottlingError(err) {
 			return nil, &workflow.ServiceBusyError{
@@ -1352,6 +1415,10 @@ func (d *cassandraPersistence) LeaseTaskList(request *LeaseTaskListRequest) (*Le
 
 // From TaskManager interface
 func (d *cassandraPersistence) UpdateTaskList(request *UpdateTaskListRequest) (*UpdateTaskListResponse, error) {
+	if d.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "UpdateTaskList is throttled due to backoff from persistence."}
+	}
+
 	tli := request.TaskListInfo
 
 	query := d.session.Query(templateUpdateTaskListQuery,
@@ -1370,6 +1437,7 @@ func (d *cassandraPersistence) UpdateTaskList(request *UpdateTaskListRequest) (*
 
 	previous := make(map[string]interface{})
 	applied, err := query.MapScanCAS(previous)
+	d.throttler.ReportError(err)
 	if err != nil {
 		if isThrottlingError(err) {
 			return nil, &workflow.ServiceBusyError{
@@ -1398,6 +1466,10 @@ func (d *cassandraPersistence) UpdateTaskList(request *UpdateTaskListRequest) (*
 
 // From TaskManager interface
 func (d *cassandraPersistence) CreateTasks(request *CreateTasksRequest) (*CreateTasksResponse, error) {
+	if d.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "CreateTasks is throttled due to backoff from persistence."}
+	}
+
 	batch := d.session.NewBatch(gocql.LoggedBatch)
 	domainID := request.TaskListInfo.DomainID
 	taskList := request.TaskListInfo.Name
@@ -1449,6 +1521,7 @@ func (d *cassandraPersistence) CreateTasks(request *CreateTasksRequest) (*Create
 
 	previous := make(map[string]interface{})
 	applied, _, err := d.session.MapExecuteBatchCAS(batch, previous)
+	d.throttler.ReportError(err)
 	if err != nil {
 		if isThrottlingError(err) {
 			return nil, &workflow.ServiceBusyError{
@@ -1474,6 +1547,10 @@ func (d *cassandraPersistence) CreateTasks(request *CreateTasksRequest) (*Create
 func (d *cassandraPersistence) GetTasks(request *GetTasksRequest) (*GetTasksResponse, error) {
 	if request.ReadLevel > request.MaxReadLevel {
 		return &GetTasksResponse{}, nil
+	}
+
+	if d.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "GetTasks is throttled due to backoff from persistence."}
 	}
 
 	// Reading tasklist tasks need to be quorum level consistent, otherwise we could loose task
@@ -1521,6 +1598,10 @@ PopulateTasks:
 
 // From TaskManager interface
 func (d *cassandraPersistence) CompleteTask(request *CompleteTaskRequest) error {
+	if d.throttler.ShouldThrottleRequest() {
+		return &workflow.ServiceBusyError{Message: "CompleteTask is throttled due to backoff from persistence."}
+	}
+
 	tli := request.TaskList
 	query := d.session.Query(templateCompleteTaskQuery,
 		tli.DomainID,
@@ -1530,6 +1611,7 @@ func (d *cassandraPersistence) CompleteTask(request *CompleteTaskRequest) error 
 		request.TaskID)
 
 	err := query.Exec()
+	d.throttler.ReportError(err)
 	if err != nil {
 		if isThrottlingError(err) {
 			return &workflow.ServiceBusyError{
@@ -1546,7 +1628,10 @@ func (d *cassandraPersistence) CompleteTask(request *CompleteTaskRequest) error 
 
 func (d *cassandraPersistence) GetTimerIndexTasks(request *GetTimerIndexTasksRequest) (*GetTimerIndexTasksResponse,
 	error) {
-	// Reading timer tasks need to be quorum level consistent, otherwise we could loose task
+	if d.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "GetTimerIndexTasks is throttled due to backoff from persistence."}
+	}
+	// Reading timer tasks need to be quorum level consistent, otherwise we could lose task
 	minTimestamp := common.UnixNanoToCQLTimestamp(request.MinTimestamp.UnixNano())
 	maxTimestamp := common.UnixNanoToCQLTimestamp(request.MaxTimestamp.UnixNano())
 	query := d.session.Query(templateGetTimerTasksQuery,

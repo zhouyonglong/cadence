@@ -118,13 +118,14 @@ type (
 	cassandraVisibilityPersistence struct {
 		session      *gocql.Session
 		lowConslevel gocql.Consistency
+		throttler    Throttler
 		logger       bark.Logger
 	}
 )
 
 // NewCassandraVisibilityPersistence is used to create an instance of VisibilityManager implementation
 func NewCassandraVisibilityPersistence(
-	hosts string, port int, user, password, dc string, keyspace string, logger bark.Logger) (VisibilityManager, error) {
+	hosts string, port int, user, password, dc string, keyspace string, throttler Throttler, logger bark.Logger) (VisibilityManager, error) {
 	cluster := common.NewCassandraCluster(hosts, port, user, password, dc)
 	cluster.Keyspace = keyspace
 	cluster.ProtoVersion = cassandraProtoVersion
@@ -137,7 +138,7 @@ func NewCassandraVisibilityPersistence(
 		return nil, err
 	}
 
-	return &cassandraVisibilityPersistence{session: session, lowConslevel: gocql.One, logger: logger}, nil
+	return &cassandraVisibilityPersistence{session: session, lowConslevel: gocql.One, throttler: throttler, logger: logger}, nil
 }
 
 // Close releases the resources held by this object
@@ -149,6 +150,10 @@ func (v *cassandraVisibilityPersistence) Close() {
 
 func (v *cassandraVisibilityPersistence) RecordWorkflowExecutionStarted(
 	request *RecordWorkflowExecutionStartedRequest) error {
+	if v.throttler.ShouldThrottleRequest() {
+		return &workflow.ServiceBusyError{Message: "RecordWorkflowExecutionStarted is throttled due to backoff from persistence."}
+	}
+
 	query := v.session.Query(templateCreateWorkflowExecutionStarted,
 		request.DomainUUID,
 		domainPartition,
@@ -170,6 +175,10 @@ func (v *cassandraVisibilityPersistence) RecordWorkflowExecutionStarted(
 
 func (v *cassandraVisibilityPersistence) RecordWorkflowExecutionClosed(
 	request *RecordWorkflowExecutionClosedRequest) error {
+	if v.throttler.ShouldThrottleRequest() {
+		return &workflow.ServiceBusyError{Message: "RecordWorkflowExecutionClosed is throttled due to backoff from persistence."}
+	}
+
 	batch := v.session.NewBatch(gocql.LoggedBatch)
 
 	// First, remove execution from the open table
@@ -213,6 +222,10 @@ func (v *cassandraVisibilityPersistence) RecordWorkflowExecutionClosed(
 
 func (v *cassandraVisibilityPersistence) ListOpenWorkflowExecutions(
 	request *ListWorkflowExecutionsRequest) (*ListWorkflowExecutionsResponse, error) {
+	if v.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "ListOpenWorkflowExecutions is throttled due to backoff from persistence."}
+	}
+
 	query := v.session.Query(templateGetOpenWorkflowExecutions,
 		request.DomainUUID,
 		domainPartition,
@@ -248,6 +261,10 @@ func (v *cassandraVisibilityPersistence) ListOpenWorkflowExecutions(
 
 func (v *cassandraVisibilityPersistence) ListClosedWorkflowExecutions(
 	request *ListWorkflowExecutionsRequest) (*ListWorkflowExecutionsResponse, error) {
+	if v.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "ListClosedWorkflowExecutions is throttled due to backoff from persistence."}
+	}
+
 	query := v.session.Query(templateGetClosedWorkflowExecutions,
 		request.DomainUUID,
 		domainPartition,
@@ -283,6 +300,10 @@ func (v *cassandraVisibilityPersistence) ListClosedWorkflowExecutions(
 
 func (v *cassandraVisibilityPersistence) ListOpenWorkflowExecutionsByType(
 	request *ListWorkflowExecutionsByTypeRequest) (*ListWorkflowExecutionsResponse, error) {
+	if v.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "ListOpenWorkflowExecutionsByType is throttled due to backoff from persistence."}
+	}
+
 	query := v.session.Query(templateGetOpenWorkflowExecutionsByType,
 		request.DomainUUID,
 		domainPartition,
@@ -319,6 +340,10 @@ func (v *cassandraVisibilityPersistence) ListOpenWorkflowExecutionsByType(
 
 func (v *cassandraVisibilityPersistence) ListClosedWorkflowExecutionsByType(
 	request *ListWorkflowExecutionsByTypeRequest) (*ListWorkflowExecutionsResponse, error) {
+	if v.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "ListClosedWorkflowExecutionsByType is throttled due to backoff from persistence."}
+	}
+
 	query := v.session.Query(templateGetClosedWorkflowExecutionsByType,
 		request.DomainUUID,
 		domainPartition,
@@ -355,6 +380,10 @@ func (v *cassandraVisibilityPersistence) ListClosedWorkflowExecutionsByType(
 
 func (v *cassandraVisibilityPersistence) ListOpenWorkflowExecutionsByWorkflowID(
 	request *ListWorkflowExecutionsByWorkflowIDRequest) (*ListWorkflowExecutionsResponse, error) {
+	if v.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "ListOpenWorkflowExecutionsByWorkflowID is throttled due to backoff from persistence."}
+	}
+
 	query := v.session.Query(templateGetOpenWorkflowExecutionsByID,
 		request.DomainUUID,
 		domainPartition,
@@ -391,6 +420,10 @@ func (v *cassandraVisibilityPersistence) ListOpenWorkflowExecutionsByWorkflowID(
 
 func (v *cassandraVisibilityPersistence) ListClosedWorkflowExecutionsByWorkflowID(
 	request *ListWorkflowExecutionsByWorkflowIDRequest) (*ListWorkflowExecutionsResponse, error) {
+	if v.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "ListClosedWorkflowExecutionsByWorkflowID is throttled due to backoff from persistence."}
+	}
+
 	query := v.session.Query(templateGetClosedWorkflowExecutionsByID,
 		request.DomainUUID,
 		domainPartition,
@@ -427,6 +460,10 @@ func (v *cassandraVisibilityPersistence) ListClosedWorkflowExecutionsByWorkflowI
 
 func (v *cassandraVisibilityPersistence) ListClosedWorkflowExecutionsByStatus(
 	request *ListClosedWorkflowExecutionsByStatusRequest) (*ListWorkflowExecutionsResponse, error) {
+	if v.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "ListClosedWorkflowExecutionsByStatus is throttled due to backoff from persistence."}
+	}
+
 	query := v.session.Query(templateGetClosedWorkflowExecutionsByStatus,
 		request.DomainUUID,
 		domainPartition,
@@ -463,6 +500,10 @@ func (v *cassandraVisibilityPersistence) ListClosedWorkflowExecutionsByStatus(
 
 func (v *cassandraVisibilityPersistence) GetClosedWorkflowExecution(
 	request *GetClosedWorkflowExecutionRequest) (*GetClosedWorkflowExecutionResponse, error) {
+	if v.throttler.ShouldThrottleRequest() {
+		return nil, &workflow.ServiceBusyError{Message: "GetClosedWorkflowExecution is throttled due to backoff from persistence."}
+	}
+
 	execution := request.Execution
 	query := v.session.Query(templateGetClosedWorkflowExecution,
 		request.DomainUUID,
