@@ -52,13 +52,16 @@ type Config struct {
 // NewConfig returns new service config with default values
 func NewConfig() *Config {
 	return &Config{
-		EnableSyncMatch:                 true,
-		LongPollExpirationInterval:      time.Minute,
-		RangeSize:                       100000,
-		GetTasksBatchSize:               1000,
-		UpdateAckInterval:               10 * time.Second,
-		OutstandingTaskAppendsThreshold: 250,
-		MaxTaskBatchSize:                100,
+		EnableSyncMatch:                   true,
+		LongPollExpirationInterval:        time.Minute,
+		RangeSize:                         100000,
+		GetTasksBatchSize:                 1000,
+		UpdateAckInterval:                 10 * time.Second,
+		OutstandingTaskAppendsThreshold:   250,
+		MaxTaskBatchSize:                  100,
+		PersistenceRPS:                    300,
+		InitialPersistenceBackoffInterval: 10 * time.Millisecond,
+		MaxPersistenceBackoffInterval:     10 * time.Second,
 	}
 }
 
