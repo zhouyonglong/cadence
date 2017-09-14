@@ -38,7 +38,7 @@ func NewConfig() *Config {
 	return &Config{
 		DefaultVisibilityMaxPageSize: 1000,
 		DefaultHistoryMaxPageSize:    1000,
-		RPS: 1200, // This limit is based on experimental runs.
+		RPS: 100000, // This limit is based on experimental runs.
 	}
 }
 
