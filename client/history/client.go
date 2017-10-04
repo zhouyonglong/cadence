@@ -22,6 +22,7 @@ package history
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -357,6 +358,8 @@ func (c *clientImpl) getHostForRequest(workflowID string) (historyserviceclient.
 		return nil, err
 	}
 
+	fmt.Printf("Calling from getHostForRequest: %v, With workflowID: %s \n", host.GetAddress(), workflowID)
+
 	return c.getThriftClient(host.GetAddress()), nil
 }
 
@@ -408,6 +411,7 @@ redirectLoop:
 		if err != nil {
 			if s, ok := err.(*h.ShardOwnershipLostError); ok {
 				// TODO: consider emitting a metric for number of redirects
+				fmt.Printf("Calling after shard ownerhip: %v \n", *s.Owner)
 				client = c.getThriftClient(*s.Owner)
 				continue redirectLoop
 			}
