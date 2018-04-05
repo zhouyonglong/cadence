@@ -286,7 +286,7 @@ func (tb *timerBuilder) loadActivityTimers(msBuilder *mutableStateBuilder) {
 				td := &timerDetails{
 					SequenceID:  SequenceID{VisibilityTimestamp: startToCloseExpiry},
 					ActivityID:  v.ScheduleID,
-					EventID:     v.StartedID,
+					EventID:     v.ScheduleID,
 					TimeoutType: w.TimeoutTypeStartToClose,
 					TimeoutSec:  v.StartToCloseTimeout,
 					TaskCreated: (v.TimerTaskStatus & TimerTaskStatusCreatedStartToClose) != 0}
@@ -300,7 +300,7 @@ func (tb *timerBuilder) loadActivityTimers(msBuilder *mutableStateBuilder) {
 					td := &timerDetails{
 						SequenceID:  SequenceID{VisibilityTimestamp: heartBeatExpiry},
 						ActivityID:  v.ScheduleID,
-						EventID:     v.StartedID,
+						EventID:     v.ScheduleID,
 						TimeoutType: w.TimeoutTypeHeartbeat,
 						TimeoutSec:  v.HeartbeatTimeout,
 						TaskCreated: (v.TimerTaskStatus & TimerTaskStatusCreatedHeartbeat) != 0}
