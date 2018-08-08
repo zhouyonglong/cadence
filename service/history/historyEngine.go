@@ -1224,8 +1224,14 @@ Update_History_Loop:
 					failCause = workflow.DecisionTaskFailedCauseBadSignalWorkflowExecutionAttributes
 					break Process_Decision_Loop
 				}
+
 				if err = validateSignalInput(attributes.Input, e.metricsClient,
-					metrics.HistoryRespondDecisionTaskCompletedScope); err != nil {
+					metrics.HistoryRespondDecisionTaskCompletedScope,
+					e.logger.WithFields(bark.Fields{
+						logging.TagDomainID:            domainID,
+						logging.TagWorkflowExecutionID: workflowExecution.GetWorkflowId(),
+						logging.TagWorkflowRunID:       workflowExecution.GetRunId(),
+					})); err != nil {
 					failDecision = true
 					failCause = workflow.DecisionTaskFailedCauseBadSignalInputSize
 					break Process_Decision_Loop
@@ -1817,7 +1823,12 @@ func (e *historyEngineImpl) SignalWorkflowExecution(ctx context.Context, signalR
 	}
 
 	if err := validateSignalInput(request.GetInput(), e.metricsClient,
-		metrics.HistorySignalWorkflowExecutionScope); err != nil {
+		metrics.HistorySignalWorkflowExecutionScope,
+		e.logger.WithFields(bark.Fields{
+			logging.TagDomainID:            domainID,
+			logging.TagWorkflowExecutionID: execution.GetWorkflowId(),
+			logging.TagWorkflowRunID:       execution.GetRunId(),
+		})); err != nil {
 		return err
 	}
 
@@ -1868,7 +1879,12 @@ func (e *historyEngineImpl) SignalWithStartWorkflowExecution(ctx context.Context
 	}
 
 	if err := validateSignalInput(sRequest.GetSignalInput(), e.metricsClient,
-		metrics.HistorySignalWithStartWorkflowExecutionScope); err != nil {
+		metrics.HistorySignalWithStartWorkflowExecutionScope,
+		e.logger.WithFields(bark.Fields{
+			logging.TagDomainID:            domainID,
+			logging.TagWorkflowExecutionID: execution.GetWorkflowId(),
+			logging.TagWorkflowRunID:       execution.GetRunId(),
+		})); err != nil {
 		return nil, err
 	}
 
@@ -2743,7 +2759,7 @@ func validateStartWorkflowExecutionRequest(request *workflow.StartWorkflowExecut
 	return nil
 }
 
-func validateSignalInput(signalInput []byte, metricsClient metrics.Client, scope int) error {
+func validateSignalInput(signalInput []byte, metricsClient metrics.Client, scope int, logger bark.Logger) error {
 	size := len(signalInput)
 	metricsClient.RecordTimer(
 		scope,
@@ -2751,6 +2767,7 @@ func validateSignalInput(signalInput []byte, metricsClient metrics.Client, scope
 		time.Duration(size),
 	)
 	if size > signalInputSizeLimit {
+		logger.WithField("signal-size", size).Warn("Signal Size Exceeds.")
 		return ErrSignalOverSize
 	}
 	return nil
