@@ -34,7 +34,6 @@ import (
 	"github.com/uber/cadence/service/matching"
 	"github.com/uber/cadence/service/worker"
 
-	"github.com/uber/cadence/common/messaging"
 	"go.uber.org/zap"
 )
 
@@ -123,7 +122,7 @@ func (s *server) startService() common.Daemon {
 	)
 	// TODO: We need to switch Cadence to use zap logger, until then just pass zap.NewNop
 	if params.ClusterMetadata.IsGlobalDomainEnabled() {
-		params.MessagingClient = messaging.NewKafkaClient(&s.cfg.Kafka, zap.NewNop(), params.Logger, params.MetricScope)
+		params.MessagingClient = s.cfg.Kafka.NewKafkaClient(zap.NewNop(), params.Logger, params.MetricScope)
 	} else {
 		params.MessagingClient = nil
 	}

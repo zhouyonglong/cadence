@@ -169,7 +169,7 @@ func (s *testCluster) createMessagingClient() messaging.Client {
 		Topics:         topics,
 		ClusterToTopic: clusterToTopic,
 	}
-	return messaging.NewKafkaClient(&kafkaConfig, zap.NewNop(), s.logger, tally.NoopScope)
+	return kafkaConfig.NewKafkaClient(zap.NewNop(), s.logger, tally.NoopScope)
 }
 
 func getTopicList(topicName string) messaging.TopicList {
